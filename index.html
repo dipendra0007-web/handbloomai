@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌸</text></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HandBloom AI – Gesture Controlled Digital Garden</title>
+    <meta name="description" content="Grow digital flowers with your hands! HandBloom AI uses real-time hand gesture recognition to create beautiful animated flowers." />
+    <meta name="keywords" content="hand gestures, digital garden, AI flowers, MediaPipe, hand tracking, gesture control" />
+    <meta property="og:title" content="HandBloom AI – Grow Flowers with Gestures" />
+    <meta property="og:description" content="Create stunning digital flowers with hand gestures powered by AI." />
+    <meta property="og:type" content="website" />
+    <meta name="theme-color" content="#06081a" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+    <!--
+      MediaPipe Hands loaded via CDN scripts (REQUIRED for WASM to work correctly).
+      Vite cannot bundle MediaPipe's WASM files – CDN script tags are the reliable approach.
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
