@@ -240,6 +240,23 @@ io.on('connection', (socket) => {
     socket.leave(`live:${streamerUid}`);
   });
 
+  // ── WebRTC Signaling Events ───────────────────────────────────────────────
+  socket.on('webrtc:join-relay', ({ streamerUid }) => {
+    pushToUser(streamerUid, 'webrtc:viewer-joined', { viewerUid: uid });
+  });
+
+  socket.on('webrtc:offer', ({ toUid, offer }) => {
+    pushToUser(toUid, 'webrtc:offer', { fromUid: uid, offer });
+  });
+
+  socket.on('webrtc:answer', ({ toUid, answer }) => {
+    pushToUser(toUid, 'webrtc:answer', { fromUid: uid, answer });
+  });
+
+  socket.on('webrtc:candidate', ({ toUid, candidate }) => {
+    pushToUser(toUid, 'webrtc:candidate', { fromUid: uid, candidate });
+  });
+
   // Comment in live stream
   socket.on('live:comment', async ({ streamerUid, text, senderName, senderAvatar, senderEmoji }) => {
     const stream = activeStreams.get(streamerUid);
