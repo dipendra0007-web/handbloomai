@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import GardenGallery from '../components/GardenGallery';
 import { GALLERY_FLOWERS, CATEGORIES, REWARD_COUPONS } from '../data/flowers';
 import { Search, Plus, Award, Tag, Zap, Gift } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { getSocket } from '../hooks/useSocket';
 
 export default function GardenPage() {
   const [search, setSearch] = useState('');
@@ -17,7 +18,7 @@ export default function GardenPage() {
   // Leaderboard state
   const [leaderboard, setLeaderboard] = useState([]);
 
-  const fetchLeaderboard = async () => {
+  const fetchLeaderboard = useCallback(async () => {
     try {
       const res = await fetch('/api/users');
       if (res.ok) {
@@ -27,12 +28,42 @@ export default function GardenPage() {
         setLeaderboard(sortedUsers);
       }
     } catch {}
-  };
+  }, []);
 
   useEffect(() => {
     fetchLeaderboard();
-    const interval = setInterval(fetchLeaderboard, 4000);
-    return () => clearInterval(interval);
+  }, [fetchLeaderboard]);
+
+  useEffect(() => {
+    const socket = getSocket();
+
+    const handleProfileUpdate = (u) => {
+      setLeaderboard(prev => {
+        const updated = prev.map(x => x.uid === u.uid ? { ...x, ...u } : x);
+        return updated.sort((a,b) => (b.level || 1) - (a.level || 1));
+      });
+    };
+
+    const handleUserRegistered = (u) => {
+      setLeaderboard(prev => {
+        const updated = prev.some(x => x.uid === u.uid) ? prev : [...prev, u];
+        return updated.sort((a,b) => (b.level || 1) - (a.level || 1));
+      });
+    };
+
+    const handleUserDeleted = ({ uid }) => {
+      setLeaderboard(prev => prev.filter(x => x.uid !== uid));
+    };
+
+    socket.on('user:profileUpdated', handleProfileUpdate);
+    socket.on('user:registered', handleUserRegistered);
+    socket.on('user:deleted', handleUserDeleted);
+
+    return () => {
+      socket.off('user:profileUpdated', handleProfileUpdate);
+      socket.off('user:registered', handleUserRegistered);
+      socket.off('user:deleted', handleUserDeleted);
+    };
   }, []);
 
   const categories = ['All', ...CATEGORIES.map(c => c.name)];

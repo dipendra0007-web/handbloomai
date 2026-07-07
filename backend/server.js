@@ -64,6 +64,7 @@ async function initDb() {
   try { await db.exec(`ALTER TABLE users ADD COLUMN github TEXT DEFAULT ''`); } catch (e) {}
   try { await db.exec(`ALTER TABLE users ADD COLUMN youtube TEXT DEFAULT ''`); } catch (e) {}
   try { await db.exec(`ALTER TABLE users ADD COLUMN hobbies TEXT DEFAULT ''`); } catch (e) {}
+  try { await db.exec(`ALTER TABLE users ADD COLUMN isBlocked INTEGER DEFAULT 0`); } catch (e) {}
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS follows (
