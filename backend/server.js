@@ -25,6 +25,7 @@ app.use(express.json({ limit: '50mb' }));
 // ── Online users & live streams tracking ──────────────────────────────────────
 const onlineMap = new Map();          // uid → socketId
 const activeStreams = new Map();       // uid → { title, startedAt, viewers: Set }
+const disconnectTimers = new Map();   // uid → setTimeout handle (grace period for reconnects)
 
 let db;
 async function initDb() {
@@ -175,12 +176,48 @@ async function getFullUser(uid) {
 }
 
 // ── SOCKET.IO ─────────────────────────────────────────────────────────────────
+
+// Helper to end a stream and clean up
+async function endStream(uid) {
+  const stream = activeStreams.get(uid);
+  if (!stream) return;
+  activeStreams.delete(uid);
+  disconnectTimers.delete(uid);
+  const endedAt = new Date().toISOString();
+  await db.run(
+    'UPDATE live_streams SET ended_at=?,peak_viewers=?,total_comments=?,total_gifts=? WHERE streamer_uid=? AND ended_at IS NULL',
+    [endedAt, stream.peakViewers || 0, stream.comments || 0, stream.gifts || 0, uid]
+  ).catch(() => {});
+  io.to(`live:${uid}`).emit('live:ended', { streamerUid: uid });
+  io.emit('live:stopped', { uid });
+  io.to('admins').emit('admin:liveStopped', { uid, endedAt });
+  console.log(`🛑 Live ended (auto-cleanup): uid=${uid}`);
+}
+
 io.on('connection', (socket) => {
   const uid = socket.handshake.auth?.uid;
   if (!uid) return;
 
   socket.join(`user:${uid}`);
   onlineMap.set(uid, socket.id);
+
+  // ── Cancel any pending disconnect grace timer for this uid ─────────────────
+  if (disconnectTimers.has(uid)) {
+    clearTimeout(disconnectTimers.get(uid));
+    disconnectTimers.delete(uid);
+    console.log(`⏪ Reconnected uid=${uid} — disconnect grace timer cancelled`);
+  }
+
+  // ── If this user was already streaming, re-join the live room ─────────────
+  if (activeStreams.has(uid)) {
+    socket.join(`live:${uid}`);
+    const stream = activeStreams.get(uid);
+    const streamData = { uid, title: stream.title, streamerName: stream.streamerName, streamerAvatar: stream.streamerAvatar, startedAt: stream.startedAt, viewers: stream.viewers.size };
+    // Re-announce to everyone so clients that missed the original event see it
+    io.emit('live:started', streamData);
+    socket.emit('live:startConfirmed', { streamId: stream.dbId || null });
+    console.log(`🔄 Streamer uid=${uid} reconnected — re-broadcasting live stream`);
+  }
 
   db.get('SELECT role FROM users WHERE uid=?', [uid]).then(u => {
     if (u?.role === 'admin') socket.join('admins');
@@ -209,9 +246,13 @@ io.on('connection', (socket) => {
       [uid, streamerName, streamerAvatar || null, title, startedAt]
     ).catch(() => ({ lastID: null }));
 
+    // Store DB id so we can reference it on reconnect
+    const stream = activeStreams.get(uid);
+    if (stream) stream.dbId = result.lastID;
+
     const streamData = { uid, title, streamerName, streamerAvatar, startedAt, viewers: 0, streamId: result.lastID };
-    pushToAll('live:started', streamData);
-    pushToAdmins('admin:liveStarted', streamData);
+    io.emit('live:started', streamData);
+    io.to('admins').emit('admin:liveStarted', streamData);
     socket.emit('live:startConfirmed', { streamId: result.lastID });
     console.log(`🎥 Live started: uid=${uid} title="${title}"`);
   });
@@ -242,6 +283,8 @@ io.on('connection', (socket) => {
 
   // ── WebRTC Signaling Events ───────────────────────────────────────────────
   socket.on('webrtc:join-relay', ({ streamerUid }) => {
+    // Only relay if the stream is actually active
+    if (!activeStreams.has(streamerUid)) return;
     pushToUser(streamerUid, 'webrtc:viewer-joined', { viewerUid: uid });
   });
 
@@ -273,42 +316,40 @@ io.on('connection', (socket) => {
     stream.gifts = (stream.gifts || 0) + 1;
     const giftData = { uid, senderName, senderEmoji, gift, ts: Date.now() };
     io.to(`live:${streamerUid}`).emit('live:gift', giftData);
-    pushToAdmins('admin:liveGift', { streamerUid, ...giftData });
+    io.to('admins').emit('admin:liveGift', { streamerUid, ...giftData });
   });
 
-  // Streamer ends stream
+  // Streamer explicitly ends stream
   socket.on('live:stop', async () => {
-    const stream = activeStreams.get(uid);
-    if (!stream) return;
-    activeStreams.delete(uid);
-    const endedAt = new Date().toISOString();
-    await db.run(
-      'UPDATE live_streams SET ended_at=?,peak_viewers=?,total_comments=?,total_gifts=? WHERE streamer_uid=? AND ended_at IS NULL',
-      [endedAt, stream.peakViewers || 0, stream.comments || 0, stream.gifts || 0, uid]
-    ).catch(() => {});
-    io.to(`live:${uid}`).emit('live:ended', { streamerUid: uid });
-    pushToAll('live:stopped', { uid });
-    pushToAdmins('admin:liveStopped', { uid, endedAt });
-    console.log(`🛑 Live ended: uid=${uid}`);
+    // Cancel any grace timer
+    if (disconnectTimers.has(uid)) {
+      clearTimeout(disconnectTimers.get(uid));
+      disconnectTimers.delete(uid);
+    }
+    await endStream(uid);
+    console.log(`🛑 Live stopped by streamer: uid=${uid}`);
   });
 
-  // ── Disconnect ─────────────────────────────────────────────────────────────
-  socket.on('disconnect', async () => {
+  // ── Disconnect with 30s grace period ───────────────────────────────────────
+  socket.on('disconnect', (reason) => {
     onlineMap.delete(uid);
     io.emit('user:offline', { uid });
-    // Auto-end stream if streamer disconnects
+    console.log(`🔴 Socket disconnected uid=${uid} reason=${reason}`);
+
+    // If this uid has an active stream, give them 30 seconds to reconnect
+    // before actually ending the stream. This prevents brief disconnects
+    // (page refresh, mobile network blip) from killing the live stream.
     if (activeStreams.has(uid)) {
-      const stream = activeStreams.get(uid);
-      activeStreams.delete(uid);
-      const endedAt = new Date().toISOString();
-      await db.run(
-        'UPDATE live_streams SET ended_at=?,peak_viewers=?,total_comments=?,total_gifts=? WHERE streamer_uid=? AND ended_at IS NULL',
-        [endedAt, stream.peakViewers || 0, stream.comments || 0, stream.gifts || 0, uid]
-      ).catch(() => {});
-      io.to(`live:${uid}`).emit('live:ended', { streamerUid: uid });
-      pushToAll('live:stopped', { uid });
+      console.log(`⏳ Starting 30s grace period for live streamer uid=${uid}`);
+      const timer = setTimeout(async () => {
+        // Only end if they haven't reconnected
+        if (activeStreams.has(uid) && !onlineMap.has(uid)) {
+          console.log(`⏰ Grace period expired — ending stream for uid=${uid}`);
+          await endStream(uid);
+        }
+      }, 30000); // 30 second grace period
+      disconnectTimers.set(uid, timer);
     }
-    console.log(`🔴 Socket disconnected uid=${uid}`);
   });
 });
 

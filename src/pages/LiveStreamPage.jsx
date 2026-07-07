@@ -99,7 +99,12 @@ export default function LiveStreamPage() {
     } catch {}
   }, []);
 
-  useEffect(() => { fetchStreams(); }, [fetchStreams]);
+  // Poll every 15s so lobby always stays fresh (fallback for missed socket events)
+  useEffect(() => {
+    fetchStreams();
+    const interval = setInterval(fetchStreams, 15000);
+    return () => clearInterval(interval);
+  }, [fetchStreams]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // When the lobby preview video element mounts, attach the stream
@@ -118,15 +123,20 @@ export default function LiveStreamPage() {
   }, [mode]);
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Auto-join viewer mode when URL has /:uid
+  // Auto-join viewer mode when URL has /:uid (also re-join on socket reconnect)
   // ─────────────────────────────────────────────────────────────────────────
   useEffect(() => {
-    if (viewerTargetUid && isLoggedIn && socket) {
+    if (!viewerTargetUid || !isLoggedIn || !socket) return;
+    const joinStream = () => {
       setMode('viewer');
       setStreamerUid(viewerTargetUid);
       socket.emit('live:join', { streamerUid: viewerTargetUid });
       socket.emit('webrtc:join-relay', { streamerUid: viewerTargetUid });
-    }
+    };
+    joinStream();
+    // Re-join on socket reconnect (e.g. brief network blip)
+    socket.on('connect', joinStream);
+    return () => socket.off('connect', joinStream);
   }, [viewerTargetUid, isLoggedIn, socket]);
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -189,14 +199,31 @@ export default function LiveStreamPage() {
     };
 
     const onStarted = (stream) => {
+      // Upsert: update viewer count if stream already in list, else add it
       setActiveStreams(prev => {
-        if (prev.find(s => s.streamerUid === stream.uid)) return prev;
+        const exists = prev.find(s => s.streamerUid === stream.uid);
+        if (exists) {
+          return prev.map(s => s.streamerUid === stream.uid ? { ...s, ...stream, streamerUid: stream.uid } : s);
+        }
         return [...prev, { ...stream, streamerUid: stream.uid }];
       });
+      // Also refresh from server to get accurate viewer counts
+      fetchStreams();
     };
 
-    const onStopped = ({ uid }) =>
+    const onStopped = ({ uid }) => {
       setActiveStreams(prev => prev.filter(s => s.streamerUid !== uid));
+      fetchStreams(); // Re-sync from server
+    };
+
+    const onNotFound = () => {
+      // Stream the viewer tried to join doesn't exist — back to lobby
+      console.warn('[Viewer] live:notFound — stream does not exist');
+      setMode('lobby');
+      setStreamerUid(null);
+      navigate('/live');
+      fetchStreams();
+    };
 
     // ── Streamer: a new viewer joined the relay ────────────────────────────
     const onViewerJoined = async ({ viewerUid }) => {
@@ -310,32 +337,34 @@ export default function LiveStreamPage() {
       }
     };
 
-    socket.on('live:comment',      onComment);
-    socket.on('live:gift',         onGift);
-    socket.on('live:viewerCount',  onViewerCount);
-    socket.on('live:joined',       onJoined);
-    socket.on('live:ended',        onEnded);
-    socket.on('live:started',      onStarted);
-    socket.on('live:stopped',      onStopped);
-    socket.on('webrtc:viewer-joined', onViewerJoined);
-    socket.on('webrtc:offer',      onWebRTCOffer);
-    socket.on('webrtc:answer',     onWebRTCAnswer);
-    socket.on('webrtc:candidate',  onWebRTCCandidate);
+    socket.on('live:comment',         onComment);
+    socket.on('live:gift',             onGift);
+    socket.on('live:viewerCount',      onViewerCount);
+    socket.on('live:joined',           onJoined);
+    socket.on('live:ended',            onEnded);
+    socket.on('live:started',          onStarted);
+    socket.on('live:stopped',          onStopped);
+    socket.on('live:notFound',         onNotFound);
+    socket.on('webrtc:viewer-joined',  onViewerJoined);
+    socket.on('webrtc:offer',          onWebRTCOffer);
+    socket.on('webrtc:answer',         onWebRTCAnswer);
+    socket.on('webrtc:candidate',      onWebRTCCandidate);
 
     return () => {
-      socket.off('live:comment',      onComment);
-      socket.off('live:gift',         onGift);
-      socket.off('live:viewerCount',  onViewerCount);
-      socket.off('live:joined',       onJoined);
-      socket.off('live:ended',        onEnded);
-      socket.off('live:started',      onStarted);
-      socket.off('live:stopped',      onStopped);
+      socket.off('live:comment',         onComment);
+      socket.off('live:gift',            onGift);
+      socket.off('live:viewerCount',     onViewerCount);
+      socket.off('live:joined',          onJoined);
+      socket.off('live:ended',           onEnded);
+      socket.off('live:started',         onStarted);
+      socket.off('live:stopped',         onStopped);
+      socket.off('live:notFound',        onNotFound);
       socket.off('webrtc:viewer-joined', onViewerJoined);
-      socket.off('webrtc:offer',      onWebRTCOffer);
-      socket.off('webrtc:answer',     onWebRTCAnswer);
-      socket.off('webrtc:candidate',  onWebRTCCandidate);
+      socket.off('webrtc:offer',         onWebRTCOffer);
+      socket.off('webrtc:answer',        onWebRTCAnswer);
+      socket.off('webrtc:candidate',     onWebRTCCandidate);
     };
-  }, [socket, cleanupViewerPeer, attachRemoteStream]);
+  }, [socket, cleanupViewerPeer, attachRemoteStream, fetchStreams, navigate]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Auto-scroll chat
