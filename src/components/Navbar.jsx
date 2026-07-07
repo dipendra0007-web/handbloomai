@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { NavLink, useLocation, Link, useNavigate } from 'react-router-dom';
-import { Flower2, Home, Palette, Image, User, Settings, Menu, X, Sparkles, ChevronRight, LogOut, LogIn, Globe, MessageSquare, Users } from 'lucide-react';
+import { Flower2, Home, Palette, Image, User, Settings, Menu, X, Sparkles, ChevronRight, LogOut, LogIn, Globe, MessageSquare, Users, Radio } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { getSocket } from '../hooks/useSocket';
 
 const NAV_LINKS = [
   { to: '/',       label: 'Home',      icon: Home },
@@ -11,12 +12,14 @@ const NAV_LINKS = [
   { to: '/social',   label: 'SocialVerse', icon: Users },
   { to: '/omniverse', label: 'Omniverse', icon: Globe },
   { to: '/messages',  label: 'Messages',  icon: MessageSquare },
+  { to: '/live',      label: 'Live Stream', icon: Radio },
 ];
 
 export default function Navbar() {
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [hasLive, setHasLive] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const { currentUser, isLoggedIn, isAdmin, logout } = useAuth();
@@ -26,6 +29,35 @@ export default function Navbar() {
     window.addEventListener('scroll', fn);
     return () => window.removeEventListener('scroll', fn);
   }, []);
+
+  // Poll for active streams on mount & setup sockets for instant updates
+  useEffect(() => {
+    const checkLive = async () => {
+      try {
+        const res = await fetch('/api/live/active');
+        if (res.ok) {
+          const list = await res.json();
+          setHasLive(list.length > 0);
+        }
+      } catch {}
+    };
+    checkLive();
+
+    const socket = getSocket();
+    if (socket) {
+      const onStarted = () => setHasLive(true);
+      const onStopped = async () => {
+        // Re-check
+        await checkLive();
+      };
+      socket.on('live:started', onStarted);
+      socket.on('live:stopped', onStopped);
+      return () => {
+        socket.off('live:started', onStarted);
+        socket.off('live:stopped', onStopped);
+      };
+    }
+  }, [currentUser]);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -51,9 +83,17 @@ export default function Navbar() {
         {/* Desktop Links */}
         <ul className="navbar-links">
           {NAV_LINKS.map(({ to, label, icon: Icon }) => (
-            <li key={to}>
+            <li key={to} style={{ position: 'relative' }}>
               <NavLink to={to} className={({ isActive }) => isActive ? 'active' : ''} end={to === '/'}>
                 <Icon size={14} /> {label}
+                {label === 'Live Stream' && hasLive && (
+                  <span style={{
+                    position: 'absolute', top: -3, right: -4, width: 8, height: 8,
+                    background: '#ef4444', borderRadius: '50%',
+                    border: '1.5px solid #06081a',
+                    boxShadow: '0 0 8px #ef4444'
+                  }}></span>
+                )}
               </NavLink>
             </li>
           ))}
@@ -215,8 +255,12 @@ export default function Navbar() {
 
           {/* Regular Navigation Links */}
           {NAV_LINKS.map(({ to, label, icon: Icon }) => (
-            <NavLink key={to} to={to} end={to === '/'} onClick={() => setMobileOpen(false)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', borderRadius: 12, textDecoration: 'none', color: 'var(--clr-white-80)', marginBottom: 2, fontWeight: 600, fontSize: '0.9rem' }}>
-              <Icon size={18} /> {label} <ChevronRight size={15} style={{ marginLeft: 'auto', opacity: 0.4 }} />
+            <NavLink key={to} to={to} end={to === '/'} onClick={() => setMobileOpen(false)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', borderRadius: 12, textDecoration: 'none', color: 'var(--clr-white-80)', marginBottom: 2, fontWeight: 600, fontSize: '0.9rem', position: 'relative' }}>
+              <Icon size={18} /> {label}
+              {label === 'Live Stream' && hasLive && (
+                <span style={{ width: 8, height: 8, background: '#ef4444', borderRadius: '50%', border: '1.5px solid #06081a', display: 'inline-block', marginLeft: 6, boxShadow: '0 0 6px #ef4444' }}></span>
+              )}
+              <ChevronRight size={15} style={{ marginLeft: 'auto', opacity: 0.4 }} />
             </NavLink>
           ))}
 

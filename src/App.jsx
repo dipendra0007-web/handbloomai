@@ -12,6 +12,7 @@ import AuthPage from './pages/AuthPage';
 import OmniversePage from './pages/OmniversePage';
 import MessagesPage from './pages/MessagesPage';
 import SocialPage from './pages/SocialPage';
+import LiveStreamPage from './pages/LiveStreamPage';
 
 export default function App() {
   return (
@@ -31,6 +32,8 @@ export default function App() {
           <Route path="/omniverse"    element={<OmniversePage />} />
           <Route path="/messages"     element={<MessagesPage />} />
           <Route path="/social"       element={<SocialPage />} />
+          <Route path="/live"         element={<LiveStreamPage />} />
+          <Route path="/live/:uid"    element={<LiveStreamPage />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

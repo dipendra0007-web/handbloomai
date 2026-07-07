@@ -1,15 +1,23 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ACHIEVEMENTS } from '../data/flowers';
 import { getSocket } from '../hooks/useSocket';
-import { Award, Share2, Settings, Edit2, Camera, X, MapPin, Link2, UserPlus, UserMinus, ShieldOff, Shield, MessageCircle, Search, Loader } from 'lucide-react';
+import {
+  Award, Share2, Edit2, Camera, X, MapPin, Link2, UserPlus, UserMinus,
+  ShieldOff, Shield, MessageCircle, Search, Loader, CheckCircle, Users,
+  Star, Radio, Heart, ChevronRight, BadgeCheck
+} from 'lucide-react';
 
-const TABS = ['Portfolio', 'Garden', 'Achievements', 'Activity'];
+const PROFILE_TABS = ['Portfolio', 'Followers', 'Following', 'Achievements'];
+const AVATAR_EMOJIS = ['🌸','🌺','🌻','🌹','🌷','🌼','🍀','🌿','🍃','🦋','🐝','🌙','⭐','🔮','🎨','🎭'];
 
-function StatBox({ icon, value, label }) {
+function StatBox({ icon, value, label, onClick }) {
   return (
-    <div style={{ textAlign: 'center', minWidth: 70 }}>
+    <div onClick={onClick} style={{ textAlign: 'center', minWidth: 70, cursor: onClick ? 'pointer' : 'default', transition: 'all 0.15s' }}
+      onMouseEnter={e => { if (onClick) e.currentTarget.style.opacity = '0.75'; }}
+      onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
+    >
       <div style={{ fontSize: '0.8rem', marginBottom: 2 }}>{icon}</div>
       <div style={{ fontWeight: 900, fontSize: '1.3rem', lineHeight: 1 }}>{value}</div>
       <div style={{ fontSize: '0.65rem', color: 'var(--clr-white-60)', marginTop: 2 }}>{label}</div>
@@ -17,588 +25,567 @@ function StatBox({ icon, value, label }) {
   );
 }
 
+function UserCard({ user, currentUser, onFollow, onMessage, navigateToProfile }) {
+  const isFollowing = currentUser?.following?.includes(user.uid);
+  const followsYou = user.following?.includes(currentUser?.uid) || user.followers?.includes(currentUser?.uid);
+
+  return (
+    <div className="glass-card" style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 14 }}>
+      <div onClick={() => navigateToProfile(user.uid)} style={{ width: 44, height: 44, borderRadius: '50%', background: 'linear-gradient(135deg,var(--clr-green),var(--clr-lavender))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem', overflow: 'hidden', flexShrink: 0, cursor: 'pointer' }}>
+        {user.avatar ? <img src={user.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : user.avatarEmoji || '🌸'}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span onClick={() => navigateToProfile(user.uid)} style={{ fontWeight: 700, fontSize: '0.9rem', cursor: 'pointer' }}>{user.name}</span>
+          {user.isCreator ? <BadgeCheck size={14} style={{ color: 'var(--clr-sky)', flexShrink: 0 }} /> : null}
+          {user.isLive ? <span style={{ fontSize: '0.6rem', background: '#ef4444', color: '#fff', padding: '1px 6px', borderRadius: 999, fontWeight: 700 }}>LIVE</span> : null}
+        </div>
+        <div style={{ fontSize: '0.72rem', color: 'var(--clr-white-60)', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span>{user.username}</span>
+          {followsYou && !isFollowing && <span style={{ background: 'rgba(134,239,172,0.1)', color: 'var(--clr-green)', fontSize: '0.6rem', padding: '1px 6px', borderRadius: 6, border: '1px solid rgba(134,239,172,0.2)' }}>Follows you</span>}
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: user.isOnline ? 'var(--clr-green)' : '#555', display: 'inline-block' }}></span>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        {currentUser && user.uid !== currentUser.uid && (
+          <>
+            <button onClick={() => onMessage(user)} style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid var(--glass-border)', background: 'transparent', color: 'var(--clr-white-60)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+              <MessageCircle size={14} />
+            </button>
+            <button onClick={() => onFollow(user.uid)} style={{ padding: '4px 12px', borderRadius: 8, border: `1px solid ${isFollowing ? 'rgba(239,68,68,0.3)' : 'rgba(134,239,172,0.3)'}`, background: isFollowing ? 'rgba(239,68,68,0.08)' : 'rgba(134,239,172,0.08)', color: isFollowing ? '#f87171' : 'var(--clr-green)', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+              {isFollowing ? <><UserMinus size={12} /> Unfollow</> : followsYou ? <><UserPlus size={12} /> Follow Back</> : <><UserPlus size={12} /> Follow</>}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ProfilePage() {
-  const { currentUser, updateProfile, followUser, blockUser, logout, isLoggedIn } = useAuth();
+  const { currentUser, updateProfile, isLoggedIn } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const socket = getSocket();
 
   const viewUid = searchParams.get('uid');
   const [allUsers, setAllUsers] = useState([]);
-
   const isOwnProfile = !viewUid || viewUid === currentUser?.uid;
   const userToShow = isOwnProfile ? currentUser : (allUsers.find(u => u.uid === viewUid) || null);
 
+  // ── Edit form state ────────────────────────────────────────────────────────
   const [editing, setEditing] = useState(false);
   const [activeTab, setActiveTab] = useState('Portfolio');
-  const [name, setName] = useState(currentUser?.name || '');
-  const [username, setUsername] = useState(currentUser?.username || '');
-  const [email, setEmail] = useState(currentUser?.email || '');
-  const [bio, setBio] = useState(currentUser?.bio || '');
-  const [location, setLocation] = useState(currentUser?.location || '');
-  const [website, setWebsite] = useState(currentUser?.website || '');
-
-  const [instagram, setInstagram] = useState(currentUser?.instagram || '');
-  const [twitter, setTwitter] = useState(currentUser?.twitter || '');
-  const [github, setGithub] = useState(currentUser?.github || '');
-  const [youtube, setYoutube] = useState(currentUser?.youtube || '');
-  const [hobbies, setHobbies] = useState(currentUser?.hobbies || '');
-
-  const [avatarEmoji, setAvatarEmoji] = useState(currentUser?.avatarEmoji || '🌸');
-  const [avatar, setAvatar] = useState(currentUser?.avatar || null);
+  const [name, setName] = useState('');
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [bio, setBio] = useState('');
+  const [location, setLocation] = useState('');
+  const [website, setWebsite] = useState('');
+  const [instagram, setInstagram] = useState('');
+  const [twitter, setTwitter] = useState('');
+  const [github, setGithub] = useState('');
+  const [youtube, setYoutube] = useState('');
+  const [hobbies, setHobbies] = useState('');
+  const [avatarEmoji, setAvatarEmoji] = useState('🌸');
+  const [avatar, setAvatar] = useState(null);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
 
+  // ── User search ────────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
+
+  // ── Followers lists ────────────────────────────────────────────────────────
+  const [followers, setFollowers] = useState([]);
+  const [loadingFollowers, setLoadingFollowers] = useState(false);
+
+  // ── Creator apply ──────────────────────────────────────────────────────────
+  const [creatorStatus, setCreatorStatus] = useState(null); // null | {status, requestedAt}
+  const [showCreatorModal, setShowCreatorModal] = useState(false);
+  const [creatorReason, setCreatorReason] = useState('');
+  const [creatorPortfolio, setCreatorPortfolio] = useState('');
+  const [applyingCreator, setApplyingCreator] = useState(false);
+
   const fileRef = useRef(null);
 
-  // Load all users
-  useEffect(() => {
-    const fetchUsers = async () => {
-      setLoadingUsers(true);
-      try {
-        const res = await fetch('/api/users');
-        if (res.ok) setAllUsers(await res.json());
-      } catch {} finally { setLoadingUsers(false); }
-    };
-    fetchUsers();
+  // ── Load users ─────────────────────────────────────────────────────────────
+  const fetchUsers = useCallback(async () => {
+    setLoadingUsers(true);
+    try {
+      const r = await fetch('/api/users');
+      if (r.ok) setAllUsers(await r.json());
+    } catch {} finally { setLoadingUsers(false); }
   }, []);
 
-  // Real-time socket updates
-  useEffect(() => {
-    const socket = getSocket();
-    const handleProfileUpdate = (u) => {
-      setAllUsers(prev => prev.map(x => x.uid === u.uid ? { ...x, ...u } : x));
-    };
-    const handleUserRegistered = (u) => {
-      setAllUsers(prev => prev.some(x => x.uid === u.uid) ? prev : [...prev, u]);
-    };
-    const handleUserDeleted = ({ uid }) => {
-      setAllUsers(prev => prev.filter(x => x.uid !== uid));
-    };
+  useEffect(() => { fetchUsers(); }, [fetchUsers]);
 
-    socket.on('user:profileUpdated', handleProfileUpdate);
-    socket.on('user:registered', handleUserRegistered);
-    socket.on('user:deleted', handleUserDeleted);
-    return () => {
-      socket.off('user:profileUpdated', handleProfileUpdate);
-      socket.off('user:registered', handleUserRegistered);
-      socket.off('user:deleted', handleUserDeleted);
-    };
+  // ── Load followers for viewed profile ──────────────────────────────────────
+  const fetchFollowers = useCallback(async (uid) => {
+    if (!uid) return;
+    setLoadingFollowers(true);
+    try {
+      const r = await fetch(`/api/users/${uid}/followers`);
+      if (r.ok) setFollowers(await r.json());
+    } catch {} finally { setLoadingFollowers(false); }
   }, []);
 
   useEffect(() => {
-    if (!isLoggedIn) navigate('/auth');
-  }, [isLoggedIn]);
+    const uid = viewUid || currentUser?.uid;
+    fetchFollowers(uid);
+  }, [viewUid, currentUser?.uid, fetchFollowers]);
 
-  // Sync form fields when currentUser changes
+  // ── Load creator status ────────────────────────────────────────────────────
   useEffect(() => {
-    if (currentUser) {
-      setName(currentUser.name || '');
-      setUsername(currentUser.username || '');
-      setEmail(currentUser.email || '');
-      setBio(currentUser.bio || '');
-      setLocation(currentUser.location || '');
-      setWebsite(currentUser.website || '');
-      setInstagram(currentUser.instagram || '');
-      setTwitter(currentUser.twitter || '');
-      setGithub(currentUser.github || '');
-      setYoutube(currentUser.youtube || '');
-      setHobbies(currentUser.hobbies || '');
-      setAvatarEmoji(currentUser.avatarEmoji || '🌸');
-      setAvatar(currentUser.avatar || null);
-    }
+    if (!isOwnProfile || !currentUser?.uid) return;
+    fetch(`/api/creator/status/${currentUser.uid}`)
+      .then(r => r.json()).then(d => setCreatorStatus(d)).catch(() => {});
+  }, [isOwnProfile, currentUser?.uid]);
+
+  // ── Populate edit fields when userToShow changes ───────────────────────────
+  useEffect(() => {
+    if (!currentUser) return;
+    setName(currentUser.name || '');
+    setUsername(currentUser.username || '');
+    setEmail(currentUser.email || '');
+    setBio(currentUser.bio || '');
+    setLocation(currentUser.location || '');
+    setWebsite(currentUser.website || '');
+    setInstagram(currentUser.instagram || '');
+    setTwitter(currentUser.twitter || '');
+    setGithub(currentUser.github || '');
+    setYoutube(currentUser.youtube || '');
+    setHobbies(currentUser.hobbies || '');
+    setAvatarEmoji(currentUser.avatarEmoji || '🌸');
+    setAvatar(currentUser.avatar || null);
   }, [currentUser]);
 
-  // Search logic
+  // ── Real-time socket sync ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (!socket) return;
+    const onProfile = (u) => {
+      setAllUsers(prev => prev.map(x => x.uid === u.uid ? { ...x, ...u } : x));
+      // Also refresh followers if the followed/follower changed
+      const uid = viewUid || currentUser?.uid;
+      if (u.uid === uid || u.following?.includes(uid) || u.followers?.includes(uid)) {
+        fetchFollowers(uid);
+      }
+    };
+    const onCreatorApproved = ({ uid }) => {
+      if (uid === currentUser?.uid) setCreatorStatus({ status: 'approved' });
+    };
+    const onCreatorRejected = ({ uid }) => {
+      if (uid === currentUser?.uid) setCreatorStatus({ status: 'rejected' });
+    };
+    socket.on('user:profileUpdated', onProfile);
+    socket.on('user:registered', u => setAllUsers(prev => [...prev.filter(x => x.uid !== u.uid), u]));
+    socket.on('user:deleted', ({ uid }) => setAllUsers(prev => prev.filter(x => x.uid !== uid)));
+    socket.on('user:online', ({ uid }) => setAllUsers(prev => prev.map(x => x.uid === uid ? { ...x, isOnline: true } : x)));
+    socket.on('user:offline', ({ uid }) => setAllUsers(prev => prev.map(x => x.uid === uid ? { ...x, isOnline: false } : x)));
+    socket.on('creator:approved', onCreatorApproved);
+    socket.on('creator:rejected', onCreatorRejected);
+    return () => {
+      socket.off('user:profileUpdated', onProfile);
+      socket.off('creator:approved', onCreatorApproved);
+      socket.off('creator:rejected', onCreatorRejected);
+    };
+  }, [socket, viewUid, currentUser?.uid, fetchFollowers]);
+
+  // ── Search ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!searchQuery.trim()) { setSearchResults([]); return; }
     const q = searchQuery.toLowerCase();
     setSearchResults(
-      allUsers.filter(u =>
-        u.uid !== currentUser?.uid &&
-        (u.username?.toLowerCase().includes(q) || u.name?.toLowerCase().includes(q))
-      ).slice(0, 8)
+      allUsers.filter(u => u.uid !== currentUser?.uid &&
+        (u.name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q)))
+        .slice(0, 10)
     );
-  }, [searchQuery, allUsers]);
+  }, [searchQuery, allUsers, currentUser?.uid]);
 
-  const handleSave = async () => {
-    setErrorMsg('');
-    setSaving(true);
+  // ── Follow ─────────────────────────────────────────────────────────────────
+  const handleFollow = async (targetUid) => {
+    if (!isLoggedIn) { navigate('/auth'); return; }
     try {
-      await updateProfile({
-        name, username, email, bio, location, website,
-        instagram, twitter, github, youtube,
-        avatarEmoji, avatar, hobbies
+      await fetch('/api/users/follow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ followerId: currentUser.uid, followedId: targetUid }),
       });
-      setEditing(false);
-    } catch (err) {
-      setErrorMsg(err.message || 'Failed to update profile.');
-    } finally {
-      setSaving(false);
-    }
+      fetchUsers();
+      fetchFollowers(viewUid || currentUser?.uid);
+    } catch {}
   };
 
+  // ── Message ────────────────────────────────────────────────────────────────
+  const handleMessage = (user) => {
+    navigate(`/messages?uid=${user.uid}`);
+  };
+
+  // ── Navigate to user profile ───────────────────────────────────────────────
+  const navigateToProfile = (uid) => {
+    navigate(`/profile?uid=${uid}`);
+  };
+
+  // ── Save profile ───────────────────────────────────────────────────────────
+  const handleSave = async () => {
+    setSaving(true); setErrorMsg(''); setSuccessMsg('');
+    try {
+      const result = await updateProfile({ name, username, email, bio, location, website, instagram, twitter, github, youtube, avatarEmoji, avatar, hobbies });
+      if (result?.error) { setErrorMsg(result.error); }
+      else { setEditing(false); setSuccessMsg('Profile saved!'); setTimeout(() => setSuccessMsg(''), 3000); }
+    } catch (e) { setErrorMsg(e.message); }
+    setSaving(false);
+  };
+
+  // ── Avatar upload ──────────────────────────────────────────────────────────
   const handleAvatarUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => setAvatar(ev.target.result);
+    reader.onloadend = () => setAvatar(reader.result);
     reader.readAsDataURL(file);
   };
 
-  const handleFollow = async (uid) => {
-    await followUser(uid);
-    const res = await fetch('/api/users');
-    if (res.ok) setAllUsers(await res.json());
+  // ── Apply creator ──────────────────────────────────────────────────────────
+  const handleCreatorApply = async () => {
+    if (!creatorReason.trim()) return;
+    setApplyingCreator(true);
+    try {
+      const r = await fetch('/api/creator/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid: currentUser.uid, reason: creatorReason, portfolio: creatorPortfolio }),
+      });
+      const d = await r.json();
+      if (r.ok) { setCreatorStatus({ status: 'pending', requestedAt: new Date().toISOString() }); setShowCreatorModal(false); }
+      else { setErrorMsg(d.error); }
+    } catch (e) { setErrorMsg(e.message); }
+    setApplyingCreator(false);
   };
 
-  const handleBlock = async (uid) => {
-    await blockUser(uid);
-    const res = await fetch('/api/users');
-    if (res.ok) setAllUsers(await res.json());
-  };
-
-  const handleLogout = async () => {
-    await logout();
-    navigate('/');
-  };
-
-  if (!currentUser) return (
-    <div style={{ minHeight: '80vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16 }}>
-      <p style={{ color: 'var(--clr-white-60)' }}>Please login to view your profile.</p>
-      <button className="btn btn-primary" onClick={() => navigate('/auth')}>Login</button>
-    </div>
-  );
-
-  // If viewing another user and not found yet
-  if (!isOwnProfile && !userToShow) return (
-    <div style={{ minHeight: '80vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16 }}>
-      <div style={{ fontSize: '3rem' }}>🔍</div>
-      <p style={{ color: 'var(--clr-white-60)' }}>User not found.</p>
-      <button className="btn btn-primary" onClick={() => navigate('/profile')}>Back to My Profile</button>
-    </div>
-  );
-
-  const followingIds = currentUser.following || [];
-  const blockedIds = currentUser.blockedUsers || [];
-  const u2 = userToShow || currentUser; // safe fallback
-  const earnedCount = ACHIEVEMENTS.filter(a => (u2.xp || 0) >= (a.xpRequired || 999)).length;
-
-  const discoverUsers = allUsers.filter(u =>
-    u.uid !== currentUser.uid &&
-    !blockedIds.includes(u.uid) &&
-    !u.isBlocked
-  );
-
-  const emojis = ['🌸', '🌺', '🌻', '🌹', '🪷', '💐', '🌷', '🌼', '🦋', '✨'];
-
-  // Helper: render social links for a user object
-  const renderSocialLinks = (u) => (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-      {u.instagram && (
-        <a href={`https://instagram.com/${u.instagram.replace('@','')}`} target="_blank" rel="noreferrer"
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', background: 'rgba(236,72,153,0.1)', border: '1px solid rgba(236,72,153,0.3)', borderRadius: 10, fontSize: '0.75rem', color: '#f472b6', textDecoration: 'none' }}>
-          📸 {u.instagram}
-        </a>
-      )}
-      {u.twitter && (
-        <a href={`https://twitter.com/${u.twitter.replace('@','')}`} target="_blank" rel="noreferrer"
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', background: 'rgba(56,189,248,0.1)', border: '1px solid rgba(56,189,248,0.3)', borderRadius: 10, fontSize: '0.75rem', color: '#38bdf8', textDecoration: 'none' }}>
-          🐦 {u.twitter}
-        </a>
-      )}
-      {u.github && (
-        <a href={`https://github.com/${u.github}`} target="_blank" rel="noreferrer"
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.2)', borderRadius: 10, fontSize: '0.75rem', color: '#e2e8f0', textDecoration: 'none' }}>
-          💻 {u.github}
-        </a>
-      )}
-      {u.youtube && (
-        <a href={u.youtube.startsWith('http') ? u.youtube : `https://${u.youtube}`} target="_blank" rel="noreferrer"
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 10, fontSize: '0.75rem', color: '#f87171', textDecoration: 'none' }}>
-          📺 YouTube
-        </a>
-      )}
-    </div>
-  );
-
-  // Helper: render hobby tags for a user object
-  const renderHobbies = (u) => {
-    if (!u.hobbies) return null;
-    const tags = u.hobbies.split(',').map(h => h.trim()).filter(Boolean);
-    if (tags.length === 0) return null;
+  // ── Guard: if not own profile and user not found ───────────────────────────
+  if (!currentUser && !isOwnProfile) {
     return (
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
-        {tags.map((t, i) => (
-          <span key={i} style={{ fontSize: '0.7rem', padding: '4px 8px', background: 'rgba(134,239,172,0.08)', border: '1px solid rgba(134,239,172,0.2)', borderRadius: 8, color: 'var(--clr-green)', fontWeight: 700 }}>
-            🏷️ {t}
-          </span>
-        ))}
+      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 16, paddingTop: 80 }}>
+        <div style={{ fontSize: '3rem' }}>🔒</div>
+        <h2 style={{ fontWeight: 800 }}>Login Required</h2>
+        <button className="btn btn-primary" onClick={() => navigate('/auth')}>Login</button>
       </div>
     );
-  };
+  }
 
-  // Helper: render a user row in search/discover
-  const renderUserRow = (u, gradient) => {
-    const isFollowing = followingIds.includes(u.uid);
-    const isBlocked = blockedIds.includes(u.uid);
-    return (
-      <div key={u.uid} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'rgba(255,255,255,0.03)', borderRadius: 12, border: '1px solid var(--glass-border)' }}>
-        <div onClick={() => navigate(`/profile?uid=${u.uid}`)} style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, cursor: 'pointer', minWidth: 0 }}>
-          <div style={{ width: 36, height: 36, borderRadius: '50%', background: gradient, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.1rem', overflow: 'hidden', flexShrink: 0 }}>
-            {u.avatar ? <img src={u.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : u.avatarEmoji || '🌸'}
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: '0.82rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.name}</div>
-            <div style={{ fontSize: '0.68rem', color: 'var(--clr-green)' }}>{u.username}</div>
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-          <button title={isFollowing ? 'Unfollow' : 'Follow'} onClick={() => handleFollow(u.uid)}
-            style={{ width: 28, height: 28, borderRadius: 8, background: isFollowing ? 'rgba(134,239,172,0.15)' : 'var(--clr-green)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: isFollowing ? 'var(--clr-green)' : '#000' }}>
-            {isFollowing ? <UserMinus size={12} /> : <UserPlus size={12} />}
-          </button>
-          <button title="Message" onClick={() => navigate(`/messages?with=${u.uid}`)}
-            style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(125,211,252,0.15)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--clr-sky)' }}>
-            <MessageCircle size={12} />
-          </button>
-          <button title={isBlocked ? 'Unblock' : 'Block'} onClick={() => handleBlock(u.uid)}
-            style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(252,165,165,0.1)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fca5a5' }}>
-            {isBlocked ? <Shield size={12} /> : <ShieldOff size={12} />}
-          </button>
-        </div>
-      </div>
-    );
-  };
+  const displayUser = userToShow;
+  const followingList = displayUser?.following || [];
+  const isFollowingViewed = !isOwnProfile && currentUser?.following?.includes(viewUid);
+  const viewedFollowsMe = !isOwnProfile && (allUsers.find(u => u.uid === viewUid)?.following?.includes(currentUser?.uid));
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '24px 16px', display: 'grid', gridTemplateColumns: '1fr 340px', gap: 24 }} className="profile-grid">
-      {/* ── Left Column ─── */}
-      <div>
-        {/* Back to own profile button when viewing another user */}
-        {!isOwnProfile && (
-          <button className="btn btn-secondary btn-sm" onClick={() => navigate('/profile')} style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
-            ← Back to My Profile
-          </button>
-        )}
+    <div style={{ minHeight: '100vh', paddingTop: 80, paddingBottom: 80 }}>
 
-        {/* Profile Card */}
-        <div className="glass-card" style={{ padding: 0, overflow: 'hidden', marginBottom: 20 }}>
-          {/* Cover */}
-          <div style={{ height: 120, background: 'linear-gradient(135deg,var(--clr-green),var(--clr-sky),var(--clr-lavender))', position: 'relative' }}>
-            <div style={{ position: 'absolute', inset: 0, backgroundImage: 'radial-gradient(circle at 20% 50%,rgba(255,255,255,0.08) 0%,transparent 60%)', pointerEvents: 'none' }} />
+      {/* Creator Modal */}
+      {showCreatorModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999, padding: 20 }}>
+          <div className="glass-card" style={{ padding: 32, maxWidth: 480, width: '100%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+              <h3 style={{ fontWeight: 800, fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <BadgeCheck size={20} style={{ color: 'var(--clr-sky)' }} /> Apply for Creator Verification
+              </h3>
+              <button onClick={() => setShowCreatorModal(false)} style={{ background: 'transparent', border: 'none', color: 'var(--clr-white-60)', cursor: 'pointer' }}><X size={18} /></button>
+            </div>
+            <p style={{ color: 'var(--clr-white-60)', fontSize: '0.85rem', marginBottom: 20 }}>Tell us why you should be a verified creator on HandBloom AI. Admin will review your application.</p>
+            <div className="form-group" style={{ marginBottom: 14 }}>
+              <label className="form-label">Why do you want to be a creator? *</label>
+              <textarea className="form-input" rows={3} placeholder="I create floral art and grow rare plants..." value={creatorReason} onChange={e => setCreatorReason(e.target.value)} style={{ resize: 'vertical', minHeight: 80 }} />
+            </div>
+            <div className="form-group" style={{ marginBottom: 20 }}>
+              <label className="form-label">Portfolio / Social Link (optional)</label>
+              <input className="form-input" placeholder="https://instagram.com/yourhandle" value={creatorPortfolio} onChange={e => setCreatorPortfolio(e.target.value)} />
+            </div>
+            {errorMsg && <div style={{ color: '#f87171', fontSize: '0.8rem', marginBottom: 12 }}>{errorMsg}</div>}
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn btn-secondary" onClick={() => setShowCreatorModal(false)} style={{ flex: 1 }}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleCreatorApply} disabled={applyingCreator || !creatorReason.trim()} style={{ flex: 1 }}>
+                {applyingCreator ? '⏳ Sending...' : '🚀 Submit Application'}
+              </button>
+            </div>
           </div>
+        </div>
+      )}
 
-          <div style={{ padding: '0 24px 24px' }}>
-            {/* Avatar + Actions */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: -40, marginBottom: 16 }}>
-              <div style={{ position: 'relative' }}>
-                <div style={{
-                  width: 80, height: 80, borderRadius: '50%',
-                  background: 'linear-gradient(135deg,var(--clr-green),var(--clr-lavender))',
-                  border: '3px solid var(--clr-bg)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: '2.2rem', overflow: 'hidden',
-                }}>
-                  {editing
-                    ? (avatar ? <img src={avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : avatarEmoji)
-                    : (u2.avatar ? <img src={u2.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : (u2.avatarEmoji || '🌸'))
-                  }
-                </div>
-                {editing && (
-                  <button onClick={() => fileRef.current?.click()} style={{
-                    position: 'absolute', bottom: 0, right: 0, width: 24, height: 24,
-                    background: 'var(--clr-green)', borderRadius: '50%', border: 'none',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer'
-                  }}>
-                    <Camera size={12} color="#000" />
-                  </button>
+      <div style={{ maxWidth: 900, margin: '0 auto', padding: '0 24px' }}>
+
+        {/* ── Profile Header ────────────────────────────────────────────────── */}
+        <div className="glass-card" style={{ padding: 32, marginBottom: 24, position: 'relative' }}>
+          {successMsg && (
+            <div style={{ position: 'absolute', top: 16, right: 16, background: 'rgba(134,239,172,0.15)', border: '1px solid rgba(134,239,172,0.3)', borderRadius: 8, padding: '8px 16px', fontSize: '0.8rem', color: 'var(--clr-green)', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <CheckCircle size={14} /> {successMsg}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 24, flexWrap: 'wrap' }}>
+            {/* Avatar */}
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <div style={{ width: 96, height: 96, borderRadius: '50%', background: 'linear-gradient(135deg,var(--clr-green),var(--clr-lavender))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.5rem', overflow: 'hidden', border: '3px solid var(--clr-green)', position: 'relative' }}>
+                {(editing ? avatar : displayUser?.avatar) ? (
+                  <img src={editing ? avatar : displayUser?.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (editing ? avatarEmoji : displayUser?.avatarEmoji) || '🌸'}
+                {displayUser?.isLive && !editing && (
+                  <div style={{ position: 'absolute', inset: 0, border: '3px solid #ef4444', borderRadius: '50%', animation: 'pulse 1.5s ease infinite' }}></div>
                 )}
-                <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleAvatarUpload} />
               </div>
+              {isOwnProfile && editing && (
+                <>
+                  <button onClick={() => fileRef.current?.click()} style={{ position: 'absolute', bottom: 0, right: 0, width: 28, height: 28, borderRadius: '50%', background: 'var(--clr-green)', border: 'none', color: '#000', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <Camera size={13} />
+                  </button>
+                  <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleAvatarUpload} />
+                </>
+              )}
+            </div>
 
-              <div style={{ display: 'flex', gap: 8 }}>
-                {isOwnProfile ? (
-                  editing ? (
-                    <>
-                      <button className="btn btn-secondary btn-sm" onClick={() => { setEditing(false); setErrorMsg(''); }}><X size={14} /> Cancel</button>
-                      <button className="btn btn-primary btn-sm" onClick={handleSave} disabled={saving}>
-                        {saving ? <Loader size={14} className="spin" /> : null} Save
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button className="btn btn-secondary btn-sm" onClick={() => setEditing(true)}><Edit2 size={14} /> Edit Profile</button>
-                      <button className="btn btn-secondary btn-sm" style={{ color: '#fca5a5' }} onClick={handleLogout}>Logout</button>
-                    </>
-                  )
-                ) : (
-                  <>
-                    <button
-                      className="btn btn-sm"
-                      onClick={() => handleFollow(u2.uid)}
-                      style={{
-                        background: followingIds.includes(u2.uid) ? 'rgba(134,239,172,0.15)' : 'var(--clr-green)',
-                        color: followingIds.includes(u2.uid) ? 'var(--clr-green)' : '#000',
-                        border: followingIds.includes(u2.uid) ? '1px solid rgba(134,239,172,0.3)' : 'none',
-                        fontWeight: 700, padding: '6px 14px', borderRadius: 10, cursor: 'pointer'
-                      }}
-                    >
-                      {followingIds.includes(u2.uid) ? 'Following' : 'Follow'}
-                    </button>
-                    <button className="btn btn-secondary btn-sm" onClick={() => navigate(`/messages?with=${u2.uid}`)}
-                      style={{ padding: '6px 14px', borderRadius: 10 }}>Message</button>
-                    <button className="btn btn-secondary btn-sm" style={{ color: '#fca5a5', padding: '6px 14px', borderRadius: 10 }}
-                      onClick={() => handleBlock(u2.uid)}>
-                      {blockedIds.includes(u2.uid) ? 'Unblock' : 'Block'}
-                    </button>
-                  </>
-                )}
+            {/* Info */}
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+                <h1 style={{ fontWeight: 900, fontSize: '1.5rem', margin: 0 }}>
+                  {displayUser?.name || 'Unknown'}
+                </h1>
+                {displayUser?.isCreator ? (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(56,189,248,0.1)', border: '1px solid rgba(56,189,248,0.3)', borderRadius: 999, padding: '2px 10px', fontSize: '0.7rem', color: 'var(--clr-sky)', fontWeight: 700 }}>
+                    <BadgeCheck size={11} /> Verified Creator
+                  </span>
+                ) : null}
+                {displayUser?.role === 'admin' ? (
+                  <span style={{ background: 'rgba(168,85,247,0.1)', border: '1px solid rgba(168,85,247,0.3)', borderRadius: 999, padding: '2px 10px', fontSize: '0.7rem', color: '#c084fc', fontWeight: 700 }}>👑 Admin</span>
+                ) : null}
+                {displayUser?.isLive ? (
+                  <span style={{ background: '#ef4444', color: '#fff', borderRadius: 999, padding: '2px 8px', fontSize: '0.65rem', fontWeight: 700, animation: 'pulse 1.5s ease infinite' }}>🔴 LIVE</span>
+                ) : null}
+              </div>
+              <div style={{ color: 'var(--clr-white-60)', fontSize: '0.85rem', marginBottom: 8 }}>{displayUser?.username}</div>
+              {displayUser?.bio && <p style={{ color: 'var(--clr-white-80)', fontSize: '0.85rem', marginBottom: 8, lineHeight: 1.5 }}>{displayUser.bio}</p>}
+              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: '0.78rem', color: 'var(--clr-white-60)' }}>
+                {displayUser?.location && <span><MapPin size={12} style={{ display: 'inline', marginRight: 4 }} />{displayUser.location}</span>}
+                {displayUser?.website && <a href={displayUser.website} target="_blank" rel="noreferrer" style={{ color: 'var(--clr-sky)', display: 'flex', alignItems: 'center', gap: 4 }}><Link2 size={12} /> {displayUser.website}</a>}
               </div>
             </div>
 
-            {/* ── Edit Form ─── */}
-            {editing && isOwnProfile ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {errorMsg && (
-                  <div style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(252,165,165,0.1)', color: '#fca5a5', border: '1px solid rgba(252,165,165,0.3)', fontSize: '0.8rem' }}>
-                    ⚠️ {errorMsg}
-                  </div>
-                )}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <div className="form-group">
-                    <label className="form-label">Full Name</label>
-                    <input className="form-input" value={name} onChange={e => setName(e.target.value)} />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Username</label>
-                    <input className="form-input" value={username} onChange={e => setUsername(e.target.value)} />
-                  </div>
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <div className="form-group">
-                    <label className="form-label">Email Address</label>
-                    <input className="form-input" type="email" value={email} onChange={e => setEmail(e.target.value)} />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Hobbies (comma separated)</label>
-                    <input className="form-input" value={hobbies} onChange={e => setHobbies(e.target.value)} placeholder="e.g. Gardening, Painting, VR" />
-                  </div>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Bio</label>
-                  <textarea className="form-input" rows={3} value={bio} onChange={e => setBio(e.target.value)} style={{ resize: 'none' }} />
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <div className="form-group">
-                    <label className="form-label">Location</label>
-                    <input className="form-input" value={location} onChange={e => setLocation(e.target.value)} />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Website</label>
-                    <input className="form-input" value={website} onChange={e => setWebsite(e.target.value)} />
-                  </div>
-                </div>
-
-                <h4 style={{ fontWeight: 800, fontSize: '0.85rem', color: 'var(--clr-green)', marginTop: 8 }}>Social Media Profiles</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <div className="form-group">
-                    <label className="form-label">Instagram Username</label>
-                    <input className="form-input" value={instagram} onChange={e => setInstagram(e.target.value)} placeholder="@handle" />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">Twitter / X Username</label>
-                    <input className="form-input" value={twitter} onChange={e => setTwitter(e.target.value)} placeholder="@handle" />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">GitHub Username</label>
-                    <input className="form-input" value={github} onChange={e => setGithub(e.target.value)} placeholder="username" />
-                  </div>
-                  <div className="form-group">
-                    <label className="form-label">YouTube Channel Link</label>
-                    <input className="form-input" value={youtube} onChange={e => setYoutube(e.target.value)} placeholder="youtube.com/c/..." />
-                  </div>
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Avatar Emoji</label>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {emojis.map(em => (
-                      <button key={em} onClick={() => { setAvatarEmoji(em); setAvatar(null); }}
-                        style={{ width: 36, height: 36, fontSize: '1.2rem', borderRadius: 10, background: avatarEmoji === em ? 'rgba(134,239,172,0.2)' : 'rgba(255,255,255,0.04)', border: `2px solid ${avatarEmoji === em ? 'var(--clr-green)' : 'var(--glass-border)'}`, cursor: 'pointer' }}>
-                        {em}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              /* ── Read-Only Profile Display ─── */
-              <>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <h2 style={{ fontWeight: 900, fontSize: '1.3rem', margin: 0 }}>{u2.name}</h2>
-                  {u2.role === 'admin' && <span className="badge badge-legendary">👑 Admin</span>}
-                  {u2.isOnline && <span style={{ fontSize: '0.65rem', padding: '2px 8px', background: 'rgba(134,239,172,0.1)', color: 'var(--clr-green)', borderRadius: 99, border: '1px solid rgba(134,239,172,0.2)' }}>🟢 Online</span>}
-                </div>
-                <div style={{ color: 'var(--clr-green)', fontSize: '0.82rem', marginBottom: 2 }}>{u2.username}</div>
-                <div style={{ color: 'var(--clr-white-60)', fontSize: '0.78rem', marginBottom: 8 }}>✉️ {u2.email}</div>
-                {u2.bio && <p style={{ color: 'var(--clr-white-60)', fontSize: '0.85rem', lineHeight: 1.5, marginBottom: 10 }}>{u2.bio}</p>}
-
-                {renderHobbies(u2)}
-
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, fontSize: '0.75rem', color: 'var(--clr-white-60)', marginBottom: 12 }}>
-                  {u2.location && <span><MapPin size={12} style={{ marginRight: 4 }} />{u2.location}</span>}
-                  {u2.website && <a href={u2.website} target="_blank" rel="noreferrer" style={{ color: 'var(--clr-sky)', display: 'flex', alignItems: 'center', gap: 4 }}><Link2 size={12} />{u2.website}</a>}
-                </div>
-
-                {renderSocialLinks(u2)}
-              </>
-            )}
-
-            {/* Stats */}
-            {!editing && (
-              <div style={{ display: 'flex', gap: 24, marginTop: 20, flexWrap: 'wrap', borderTop: '1px solid var(--glass-border)', paddingTop: 16 }}>
-                <StatBox icon="🌸" value={u2.flowers || 0} label="Flowers" />
-                <StatBox icon="📤" value={u2.shared || 0} label="Shared" />
-                <StatBox icon="❤️" value={u2.likes || 0} label="Likes" />
-                <StatBox icon="👥" value={(u2.following || followingIds).length || 0} label="Following" />
-                <StatBox icon="🏆" value={earnedCount} label="Badges" />
-              </div>
-            )}
+            {/* Action buttons */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+              {isOwnProfile ? (
+                <>
+                  <button className="btn btn-primary" onClick={() => editing ? handleSave() : setEditing(true)} disabled={saving} style={{ minWidth: 120 }}>
+                    {saving ? <Loader size={14} className="spin" /> : editing ? '💾 Save' : <><Edit2 size={14} /> Edit Profile</>}
+                  </button>
+                  {editing && <button className="btn btn-secondary" onClick={() => { setEditing(false); setErrorMsg(''); }} style={{ minWidth: 120 }}>Cancel</button>}
+                  {/* Creator apply button */}
+                  {!currentUser?.isCreator && (
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => { setCreatorReason(''); setCreatorPortfolio(''); setShowCreatorModal(true); }}
+                      disabled={creatorStatus?.status === 'pending'}
+                      style={{ minWidth: 120, fontSize: '0.78rem', borderColor: creatorStatus?.status === 'pending' ? 'rgba(251,191,36,0.3)' : undefined, color: creatorStatus?.status === 'pending' ? '#fbbf24' : undefined }}
+                    >
+                      {creatorStatus?.status === 'pending' ? '⏳ Application Pending' :
+                       creatorStatus?.status === 'rejected' ? '🔄 Re-apply Creator' :
+                       <><BadgeCheck size={13} /> Apply as Creator</>}
+                    </button>
+                  )}
+                  {currentUser?.isCreator && !displayUser?.isLive && (
+                    <button className="btn btn-secondary" onClick={() => navigate('/live')} style={{ minWidth: 120, fontSize: '0.78rem', borderColor: 'rgba(239,68,68,0.3)', color: '#f87171' }}>
+                      <Radio size={13} /> Go Live
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button className="btn btn-primary" onClick={() => handleFollow(viewUid)} style={{ minWidth: 120 }}>
+                    {isFollowingViewed ? <><UserMinus size={14} /> Unfollow</> : viewedFollowsMe ? <><UserPlus size={14} /> Follow Back</> : <><UserPlus size={14} /> Follow</>}
+                  </button>
+                  {currentUser && (
+                    <button className="btn btn-secondary" onClick={() => navigate(`/messages?uid=${viewUid}`)} style={{ minWidth: 120 }}>
+                      <MessageCircle size={14} /> Message
+                    </button>
+                  )}
+                  {displayUser?.isLive && (
+                    <button className="btn btn-secondary" onClick={() => navigate(`/live/${viewUid}`)} style={{ minWidth: 120, borderColor: 'rgba(239,68,68,0.3)', color: '#f87171' }}>
+                      <Radio size={13} /> Watch Live
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
           </div>
+
+          {/* Stats row */}
+          <div style={{ display: 'flex', gap: 28, marginTop: 24, paddingTop: 20, borderTop: '1px solid var(--glass-border)', flexWrap: 'wrap' }}>
+            <StatBox icon="🌸" value={displayUser?.flowers || 0} label="Flowers" />
+            <StatBox icon="❤️" value={displayUser?.likes || 0} label="Likes" />
+            <StatBox icon="⭐" value={`Lv.${displayUser?.level || 1}`} label={`${displayUser?.xp || 0} XP`} />
+            <StatBox icon="👥" value={followers.length} label="Followers" onClick={() => setActiveTab('Followers')} />
+            <StatBox icon="➡️" value={followingList.length} label="Following" onClick={() => setActiveTab('Following')} />
+          </div>
+
+          {/* Social links */}
+          {(displayUser?.instagram || displayUser?.twitter || displayUser?.github || displayUser?.youtube) && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16 }}>
+              {displayUser.instagram && <a href={`https://instagram.com/${displayUser.instagram}`} target="_blank" rel="noreferrer" style={{ fontSize: '0.72rem', padding: '4px 10px', background: 'rgba(236,72,153,0.08)', border: '1px solid rgba(236,72,153,0.2)', borderRadius: 8, color: '#f472b6', textDecoration: 'none' }}>📸 @{displayUser.instagram}</a>}
+              {displayUser.twitter && <a href={`https://twitter.com/${displayUser.twitter}`} target="_blank" rel="noreferrer" style={{ fontSize: '0.72rem', padding: '4px 10px', background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.2)', borderRadius: 8, color: '#38bdf8', textDecoration: 'none' }}>🐦 @{displayUser.twitter}</a>}
+              {displayUser.github && <a href={`https://github.com/${displayUser.github}`} target="_blank" rel="noreferrer" style={{ fontSize: '0.72rem', padding: '4px 10px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, color: '#e2e8f0', textDecoration: 'none' }}>💻 {displayUser.github}</a>}
+              {displayUser.youtube && <a href={`https://youtube.com/${displayUser.youtube}`} target="_blank" rel="noreferrer" style={{ fontSize: '0.72rem', padding: '4px 10px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 8, color: '#f87171', textDecoration: 'none' }}>📺 YouTube</a>}
+            </div>
+          )}
+
+          {/* Hobbies */}
+          {displayUser?.hobbies && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 12 }}>
+              {displayUser.hobbies.split(',').map(h => h.trim()).filter(Boolean).map((h, i) => (
+                <span key={i} style={{ fontSize: '0.7rem', padding: '3px 10px', background: 'rgba(134,239,172,0.08)', border: '1px solid rgba(134,239,172,0.2)', borderRadius: 8, color: 'var(--clr-green)' }}>🏷️ {h}</span>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Tabs */}
-        <div className="glass-card" style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ display: 'flex', borderBottom: '1px solid var(--glass-border)', overflowX: 'auto' }}>
-            {TABS.map(t => (
-              <button key={t} onClick={() => setActiveTab(t)}
-                style={{ padding: '14px 22px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 700, whiteSpace: 'nowrap',
-                  color: activeTab === t ? 'var(--clr-green)' : 'var(--clr-white-60)',
-                  borderBottom: activeTab === t ? '2px solid var(--clr-green)' : '2px solid transparent',
-                }}>
-                {t}
+        {/* ── EDIT FORM ──────────────────────────────────────────────────────── */}
+        {isOwnProfile && editing && (
+          <div className="glass-card" style={{ padding: 28, marginBottom: 24 }}>
+            <h3 style={{ fontWeight: 800, marginBottom: 20, fontSize: '1rem' }}>✏️ Edit Your Profile</h3>
+            {errorMsg && <div style={{ color: '#f87171', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: '0.83rem' }}>{errorMsg}</div>}
+
+            {/* Avatar emoji picker */}
+            <div className="form-group" style={{ marginBottom: 16 }}>
+              <label className="form-label">Avatar Emoji</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {AVATAR_EMOJIS.map(e => (
+                  <button key={e} onClick={() => { setAvatarEmoji(e); setAvatar(null); }}
+                    style={{ width: 38, height: 38, borderRadius: 8, border: `2px solid ${avatarEmoji === e && !avatar ? 'var(--clr-green)' : 'transparent'}`, background: 'rgba(255,255,255,0.06)', fontSize: '1.3rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {e}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+              <div className="form-group"><label className="form-label">Full Name</label><input className="form-input" value={name} onChange={e => setName(e.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Username</label><input className="form-input" value={username} onChange={e => setUsername(e.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Email</label><input className="form-input" type="email" value={email} onChange={e => setEmail(e.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Location</label><input className="form-input" placeholder="City, Country" value={location} onChange={e => setLocation(e.target.value)} /></div>
+              <div className="form-group" style={{ gridColumn: '1/-1' }}><label className="form-label">Bio</label><textarea className="form-input" rows={2} value={bio} onChange={e => setBio(e.target.value)} style={{ resize: 'vertical' }} /></div>
+              <div className="form-group"><label className="form-label">Website</label><input className="form-input" placeholder="https://..." value={website} onChange={e => setWebsite(e.target.value)} /></div>
+              <div className="form-group"><label className="form-label">Hobbies (comma separated)</label><input className="form-input" placeholder="Gardening, Photography..." value={hobbies} onChange={e => setHobbies(e.target.value)} /></div>
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: '0.8rem', color: 'var(--clr-white-60)', marginBottom: 10 }}>🔗 Social Media</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div className="form-group"><label className="form-label">📸 Instagram handle</label><input className="form-input" placeholder="yourhandle" value={instagram} onChange={e => setInstagram(e.target.value)} /></div>
+                <div className="form-group"><label className="form-label">🐦 Twitter/X handle</label><input className="form-input" placeholder="yourhandle" value={twitter} onChange={e => setTwitter(e.target.value)} /></div>
+                <div className="form-group"><label className="form-label">💻 GitHub username</label><input className="form-input" placeholder="yourusername" value={github} onChange={e => setGithub(e.target.value)} /></div>
+                <div className="form-group"><label className="form-label">📺 YouTube channel</label><input className="form-input" placeholder="channel name/ID" value={youtube} onChange={e => setYoutube(e.target.value)} /></div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn btn-secondary" onClick={() => { setEditing(false); setErrorMsg(''); }} style={{ flex: 1 }}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSave} disabled={saving} style={{ flex: 1 }}>
+                {saving ? <><Loader size={14} className="spin" /> Saving...</> : '💾 Save Changes'}
               </button>
-            ))}
+            </div>
           </div>
-          <div style={{ padding: 24 }}>
-            {activeTab === 'Portfolio' && (
-              <div style={{ color: 'var(--clr-white-60)', textAlign: 'center', padding: 40 }}>
-                <div style={{ fontSize: '3rem', marginBottom: 12 }}>🌸</div>
-                <div style={{ fontWeight: 700 }}>No flowers created yet.</div>
-                <div style={{ fontSize: '0.8rem', marginTop: 6 }}>Use hand gestures in the Studio to create flowers!</div>
-                <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => navigate('/studio')}>Open Studio</button>
+        )}
+
+        {/* ── TABS ──────────────────────────────────────────────────────────── */}
+        <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'rgba(255,255,255,0.03)', borderRadius: 12, padding: 4, border: '1px solid var(--glass-border)' }}>
+          {PROFILE_TABS.map(t => (
+            <button key={t} onClick={() => setActiveTab(t)} style={{ flex: 1, padding: '9px 12px', borderRadius: 9, border: 'none', background: activeTab === t ? 'var(--clr-green)' : 'transparent', color: activeTab === t ? '#000' : 'var(--clr-white-60)', fontWeight: activeTab === t ? 800 : 500, fontSize: '0.82rem', cursor: 'pointer', transition: 'all 0.2s' }}>
+              {t === 'Followers' ? `Followers (${followers.length})` : t === 'Following' ? `Following (${followingList.length})` : t}
+            </button>
+          ))}
+        </div>
+
+        {/* ── TAB CONTENT ───────────────────────────────────────────────────── */}
+
+        {/* Portfolio */}
+        {activeTab === 'Portfolio' && (
+          <div>
+            {/* User search (own profile only) */}
+            {isOwnProfile && (
+              <div className="glass-card" style={{ padding: 20, marginBottom: 16 }}>
+                <div style={{ position: 'relative' }}>
+                  <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--clr-white-40)' }} />
+                  <input className="form-input" style={{ paddingLeft: 36 }} placeholder="Search users by name or @username..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+                </div>
+                {searchResults.length > 0 && (
+                  <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {searchResults.map(u => (
+                      <UserCard key={u.uid} user={u} currentUser={currentUser} onFollow={handleFollow} onMessage={handleMessage} navigateToProfile={navigateToProfile} />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
-            {activeTab === 'Garden' && (
-              <div style={{ color: 'var(--clr-white-60)', textAlign: 'center', padding: 40 }}>
-                <div style={{ fontSize: '3rem', marginBottom: 12 }}>🌿</div>
-                <div style={{ fontWeight: 700 }}>Your garden is empty.</div>
-                <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => navigate('/garden')}>Visit Garden</button>
+            <div className="glass-card" style={{ padding: 24, textAlign: 'center' }}>
+              <div style={{ fontSize: '3rem', marginBottom: 12 }}>🌸</div>
+              <p style={{ color: 'var(--clr-white-60)', fontSize: '0.9rem' }}>
+                {isOwnProfile ? 'Your garden creations will appear here.' : `${displayUser?.name}'s garden creations will appear here.`}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Followers */}
+        {activeTab === 'Followers' && (
+          <div>
+            {loadingFollowers ? (
+              <div style={{ textAlign: 'center', padding: 40, color: 'var(--clr-white-60)' }}><Loader size={24} className="spin" /></div>
+            ) : followers.length === 0 ? (
+              <div className="glass-card" style={{ padding: 40, textAlign: 'center' }}>
+                <div style={{ fontSize: '3rem', marginBottom: 12 }}>👥</div>
+                <p style={{ color: 'var(--clr-white-60)', fontSize: '0.9rem' }}>No followers yet.</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {followers.map(u => (
+                  <UserCard key={u.uid} user={{...u, ...(allUsers.find(x => x.uid === u.uid) || {})}} currentUser={currentUser} onFollow={handleFollow} onMessage={handleMessage} navigateToProfile={navigateToProfile} />
+                ))}
               </div>
             )}
-            {activeTab === 'Achievements' && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 14 }}>
-                {ACHIEVEMENTS.map((a, i) => {
-                  const earned = (u2.xp || 0) >= (a.xpRequired || 999);
-                  return (
-                    <div key={i} className="glass-card" style={{ padding: 16, opacity: earned ? 1 : 0.4, textAlign: 'center' }}>
-                      <div style={{ fontSize: '2rem', marginBottom: 6 }}>{a.icon}</div>
-                      <div style={{ fontWeight: 800, fontSize: '0.85rem', marginBottom: 4 }}>{a.name}</div>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--clr-white-60)' }}>{a.description}</div>
-                    </div>
-                  );
+          </div>
+        )}
+
+        {/* Following */}
+        {activeTab === 'Following' && (
+          <div>
+            {followingList.length === 0 ? (
+              <div className="glass-card" style={{ padding: 40, textAlign: 'center' }}>
+                <div style={{ fontSize: '3rem', marginBottom: 12 }}>➡️</div>
+                <p style={{ color: 'var(--clr-white-60)', fontSize: '0.9rem' }}>Not following anyone yet.</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {followingList.map(uid => {
+                  const u = allUsers.find(x => x.uid === uid);
+                  if (!u) return null;
+                  return <UserCard key={uid} user={u} currentUser={currentUser} onFollow={handleFollow} onMessage={handleMessage} navigateToProfile={navigateToProfile} />;
                 })}
               </div>
             )}
-            {activeTab === 'Activity' && (
-              <div style={{ color: 'var(--clr-white-60)', textAlign: 'center', padding: 40 }}>
-                <div style={{ fontSize: '3rem', marginBottom: 12 }}>📊</div>
-                <div style={{ fontWeight: 700 }}>No recent activity.</div>
+          </div>
+        )}
+
+        {/* Achievements */}
+        {activeTab === 'Achievements' && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 16 }}>
+            {(ACHIEVEMENTS || []).map((ach, i) => (
+              <div key={i} className="glass-card" style={{ padding: 20, textAlign: 'center', opacity: 0.5 }}>
+                <div style={{ fontSize: '2.5rem', marginBottom: 10 }}>{ach.icon || '🏆'}</div>
+                <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: 4 }}>{ach.title || ach.name}</div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--clr-white-60)' }}>{ach.desc || ach.description}</div>
               </div>
-            )}
+            ))}
           </div>
-        </div>
+        )}
       </div>
-
-      {/* ── Right Column ─── */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        {/* Search Users */}
-        <div className="glass-card" style={{ padding: 20 }}>
-          <h4 style={{ fontWeight: 800, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Search size={16} style={{ color: 'var(--clr-green)' }} /> Find Gardeners
-          </h4>
-          <div style={{ position: 'relative' }}>
-            <input
-              className="form-input"
-              placeholder="Search by @username or name..."
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-            />
-          </div>
-          {searchQuery && (
-            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {searchResults.length === 0 ? (
-                <div style={{ color: 'var(--clr-white-60)', fontSize: '0.8rem', textAlign: 'center', padding: 12 }}>No users found</div>
-              ) : (
-                searchResults.map(u => renderUserRow(u, 'linear-gradient(135deg,var(--clr-green),var(--clr-lavender))'))
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Community — Discover Users */}
-        <div className="glass-card" style={{ padding: 20 }}>
-          <h4 style={{ fontWeight: 800, marginBottom: 14 }}>🌍 Community Gardeners</h4>
-          {loadingUsers && <div style={{ textAlign: 'center', color: 'var(--clr-white-60)', fontSize: '0.82rem' }}>Loading...</div>}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 380, overflowY: 'auto' }}>
-            {discoverUsers.slice(0, 12).map(u => renderUserRow(u, 'linear-gradient(135deg,var(--clr-lavender),var(--clr-gold))'))}
-            {discoverUsers.length === 0 && !loadingUsers && (
-              <div style={{ textAlign: 'center', color: 'var(--clr-white-60)', padding: 24, fontSize: '0.82rem' }}>
-                No other gardeners found yet.
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Account Info */}
-        <div className="glass-card" style={{ padding: 20 }}>
-          <h4 style={{ fontWeight: 800, marginBottom: 14 }}>🔐 {isOwnProfile ? 'Account Info' : `${u2.name}'s Info`}</h4>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.8rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--clr-white-60)' }}>Email</span>
-              <span style={{ fontWeight: 600, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u2.email}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--clr-white-60)' }}>Joined</span>
-              <span style={{ fontWeight: 600 }}>{u2.joinedAt ? new Date(u2.joinedAt).toLocaleDateString() : '—'}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--clr-white-60)' }}>Level</span>
-              <span style={{ fontWeight: 700, color: 'var(--clr-gold)' }}>⭐ Level {u2.level || 1}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--clr-white-60)' }}>XP</span>
-              <span style={{ fontWeight: 700, color: 'var(--clr-green)' }}>{u2.xp || 0} XP</span>
-            </div>
-          </div>
-          {isOwnProfile && (
-            <button className="btn btn-secondary" style={{ width: '100%', marginTop: 14, color: '#fca5a5', borderColor: 'rgba(252,165,165,0.3)' }} onClick={handleLogout}>
-              Logout
-            </button>
-          )}
-        </div>
-      </div>
-
-      <style>{`
-        @media (max-width: 768px) {
-          .profile-grid {
-            grid-template-columns: 1fr !important;
-          }
-        }
-      `}</style>
     </div>
   );
 }

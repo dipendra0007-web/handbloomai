@@ -585,9 +585,10 @@ export default function MessagesPage() {
                           </div>
                         )}
                         {m.type === 'call-recording' && (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                            <div style={{ fontSize: '0.8rem', fontStyle: 'italic' }}>🎥 Video Call Recording</div>
-                            <video src={m.content} controls style={{ width: '100%', maxWidth: 280, borderRadius: 10 }} />
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <div style={{ fontSize: '0.8rem', fontStyle: 'italic', color: 'var(--clr-white-60)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                              🎥 Video Call Ended (Recording archived to Admin Logs)
+                            </div>
                           </div>
                         )}
                       </div>

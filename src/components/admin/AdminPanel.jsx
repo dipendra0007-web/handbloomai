@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { getSocket } from '../../hooks/useSocket';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
@@ -6,7 +6,8 @@ import {
   LayoutDashboard, Flower2, Tag, Users, Activity, ShieldCheck,
   Plus, Search, TrendingUp, TrendingDown, Package, RefreshCw,
   Settings, LogOut, Trash2, BarChart2, Shield, Gift, Calendar,
-  MessageSquare, AlertTriangle, UserPlus, RotateCcw, Lock, Unlock, Eye
+  MessageSquare, AlertTriangle, UserPlus, RotateCcw, Lock, Unlock, Eye,
+  Radio, BadgeCheck
 } from 'lucide-react';
 import { FLOWER_TYPES, CATEGORIES, PRODUCTS_LIBRARY, REWARD_COUPONS } from '../../data/flowers';
 
@@ -21,6 +22,8 @@ const NAV_SECTIONS = [
   { title: 'Users & Safety', items: [
     { id: 'users', label: 'User Management', icon: Users },
     { id: 'register', label: 'Register User', icon: UserPlus },
+    { id: 'creator-hub', label: 'Creator Hub', icon: BadgeCheck },
+    { id: 'live-streams', label: 'Live Streams', icon: Radio },
     { id: 'messages', label: 'Messages Audit', icon: MessageSquare },
     { id: 'coupons', label: 'Coupons', icon: Gift },
     { id: 'activity', label: 'Live Activity', icon: Activity },
@@ -256,7 +259,7 @@ function UserManagement({ realUsers, onRefresh }) {
             {filtered.map(u => {
               const isExpanded = expandedUser === u.uid;
               return (
-                <optgroup key={u.uid} style={{ display: 'table-row-group' }}>
+                <React.Fragment key={u.uid}>
                   <tr style={{ opacity: u.isBlocked ? 0.5 : 1 }}>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -275,7 +278,7 @@ function UserManagement({ realUsers, onRefresh }) {
                     <td style={{ fontSize: '0.72rem', color: 'var(--clr-white-60)' }}>{u.joinedAt ? new Date(u.joinedAt).toLocaleDateString() : '—'}</td>
                     <td>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.7rem', padding: '2px 8px', borderRadius: 99, background: u.isBlocked ? 'rgba(252,165,165,0.15)' : 'rgba(134,239,172,0.1)', color: u.isBlocked ? '#fca5a5' : 'var(--clr-green)' }}>
-                        {u.isBlocked ? '🔴 Blocked' : '🟢 Active'}
+                        {u.isBlocked ? '🔴 Blocked' : (u.isOnline ? '🟢 Online' : '⚪ Active')}
                       </span>
                     </td>
                     <td>
@@ -310,7 +313,7 @@ function UserManagement({ realUsers, onRefresh }) {
                       </div>
                     </td>
                   </tr>
-                  
+
                   {isExpanded && (
                     <tr>
                       <td colSpan="7" style={{ padding: '16px 24px', background: 'rgba(255,255,255,0.01)', borderBottom: '1px solid var(--glass-border)' }}>
@@ -320,7 +323,13 @@ function UserManagement({ realUsers, onRefresh }) {
                             <p style={{ fontSize: '0.78rem', color: 'var(--clr-white-80)', lineHeight: 1.5, margin: 0 }}>
                               {u.bio || 'No biography written.'}
                             </p>
-                            
+                            {u.hobbies && (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
+                                {u.hobbies.split(',').map(h => h.trim()).filter(Boolean).map((h, i) => (
+                                  <span key={i} style={{ fontSize: '0.65rem', padding: '2px 6px', background: 'rgba(134,239,172,0.08)', border: '1px solid rgba(134,239,172,0.2)', borderRadius: 6, color: 'var(--clr-green)' }}>🏷️ {h}</span>
+                                ))}
+                              </div>
+                            )}
                             <div style={{ display: 'flex', gap: 12, marginTop: 12, fontSize: '0.75rem', color: 'var(--clr-white-60)' }}>
                               {u.website && (
                                 <span>
@@ -330,7 +339,7 @@ function UserManagement({ realUsers, onRefresh }) {
                               <span>⭐ Level {u.level || 1} ({u.xp || 0} XP)</span>
                             </div>
                           </div>
-                          
+
                           <div>
                             <h5 style={{ fontWeight: 800, fontSize: '0.8rem', color: 'var(--clr-green)', marginBottom: 6 }}>Connected Profiles</h5>
                             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -367,7 +376,7 @@ function UserManagement({ realUsers, onRefresh }) {
                       </td>
                     </tr>
                   )}
-                </optgroup>
+                </React.Fragment>
               );
             })}
             {filtered.length === 0 && (
@@ -782,6 +791,308 @@ function Moderation({ onRefresh }) {
   );
 }
 
+
+// ─── Creator Hub (Verification & Application Management) ──────────────────────
+function CreatorHub({ onRefresh }) {
+  const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState('pending'); // pending | approved | rejected | all
+  const [rejectUid, setRejectUid] = useState(null);
+  const [rejectReason, setRejectReason] = useState('');
+
+  const loadRequests = async () => {
+    setLoading(true);
+    try {
+      const r = await fetch('/api/admin/creator/requests');
+      if (r.ok) setRequests(await r.json());
+    } catch {} finally { setLoading(false); }
+  };
+
+  useEffect(() => {
+    loadRequests();
+    const interval = setInterval(loadRequests, 8000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleApprove = async (uid) => {
+    try {
+      const res = await fetch(`/api/admin/creator/${uid}/approve`, { method: 'POST' });
+      if (res.ok) {
+        setRequests(prev => prev.map(r => r.uid === uid ? { ...r, status: 'approved', reviewedAt: new Date().toISOString() } : r));
+        onRefresh();
+      }
+    } catch {}
+  };
+
+  const handleRejectSubmit = async () => {
+    if (!rejectUid) return;
+    try {
+      const res = await fetch(`/api/admin/creator/${rejectUid}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: rejectReason })
+      });
+      if (res.ok) {
+        setRequests(prev => prev.map(r => r.uid === rejectUid ? { ...r, status: 'rejected', reviewedAt: new Date().toISOString() } : r));
+        setRejectUid(null);
+        setRejectReason('');
+        onRefresh();
+      }
+    } catch {}
+  };
+
+  const handleRevoke = async (uid) => {
+    if (!window.confirm('Are you sure you want to revoke creator status for this user?')) return;
+    try {
+      const res = await fetch(`/api/admin/creator/${uid}/revoke`, { method: 'POST' });
+      if (res.ok) {
+        setRequests(prev => prev.filter(r => r.uid !== uid));
+        onRefresh();
+      }
+    } catch {}
+  };
+
+  const filtered = requests.filter(r => {
+    if (tab === 'pending') return r.status === 'pending';
+    if (tab === 'approved') return r.status === 'approved';
+    if (tab === 'rejected') return r.status === 'rejected';
+    return true;
+  });
+
+  return (
+    <div>
+      <div className="admin-header">
+        <div>
+          <div className="admin-title">Creator Verification Hub</div>
+          <div className="admin-subtitle">Review applications, verify digital gardeners, and manage creator status.</div>
+        </div>
+        <button className="btn btn-secondary btn-sm" onClick={loadRequests}><RefreshCw size={14} /> Reload</button>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        {['pending', 'approved', 'rejected', 'all'].map(t => (
+          <button key={t} onClick={() => setTab(t)}
+            style={{
+              padding: '6px 16px', borderRadius: 8, border: 'none', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer',
+              background: tab === t ? 'var(--clr-green)' : 'rgba(255,255,255,0.04)',
+              color: tab === t ? '#000' : 'var(--clr-white-60)'
+            }}
+          >
+            {t.charAt(0).toUpperCase() + t.slice(1)} ({requests.filter(r => t === 'all' ? true : r.status === t).length})
+          </button>
+        ))}
+      </div>
+
+      <div className="data-table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Gardener</th>
+              <th>Reason / Statement</th>
+              <th>Portfolio / Social</th>
+              <th>Requested At</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map(r => (
+              <tr key={r.uid}>
+                <td>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'linear-gradient(135deg,var(--clr-green),var(--clr-lavender))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem', overflow: 'hidden' }}>
+                      {r.avatar ? <img src={r.avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : r.avatarEmoji || '🌸'}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '0.82rem' }}>{r.name}</div>
+                      <div style={{ fontSize: '0.68rem', color: 'var(--clr-white-60)' }}>{r.username}</div>
+                    </div>
+                  </div>
+                </td>
+                <td style={{ fontSize: '0.78rem', maxStrWidth: 300, whiteSpace: 'normal', lineHeight: 1.4 }}>{r.reason}</td>
+                <td style={{ fontSize: '0.75rem' }}>
+                  {r.portfolio ? (
+                    <a href={r.portfolio} target="_blank" rel="noreferrer" style={{ color: 'var(--clr-sky)' }}>{r.portfolio}</a>
+                  ) : <span style={{ color: 'var(--clr-white-40)' }}>—</span>}
+                </td>
+                <td style={{ fontSize: '0.72rem', color: 'var(--clr-white-60)' }}>{new Date(r.requestedAt).toLocaleString()}</td>
+                <td>
+                  <span className={`badge badge-${r.status === 'approved' ? 'rare' : r.status === 'pending' ? 'common' : 'legendary'}`} style={{ fontSize: '0.62rem' }}>
+                    {r.status.toUpperCase()}
+                  </span>
+                </td>
+                <td>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {r.status === 'pending' && (
+                      <>
+                        <button className="btn btn-secondary btn-sm" style={{ padding: '4px 10px', fontSize: '0.7rem', color: 'var(--clr-green)', borderColor: 'rgba(134,239,172,0.3)' }} onClick={() => handleApprove(r.uid)}>Approve</button>
+                        <button className="btn btn-secondary btn-sm" style={{ padding: '4px 10px', fontSize: '0.7rem', color: '#f87171', borderColor: 'rgba(239,68,68,0.3)' }} onClick={() => setRejectUid(r.uid)}>Reject</button>
+                      </>
+                    )}
+                    {r.status === 'approved' && (
+                      <button className="btn btn-secondary btn-sm" style={{ padding: '4px 10px', fontSize: '0.7rem', color: '#fca5a5', borderColor: 'rgba(252,165,165,0.2)' }} onClick={() => handleRevoke(r.uid)}>Revoke Creator</button>
+                    )}
+                    {r.status === 'rejected' && (
+                      <span style={{ fontSize: '0.68rem', color: 'var(--clr-white-40)' }}>Rejected</span>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {filtered.length === 0 && (
+              <tr><td colSpan="6" style={{ textAlign: 'center', padding: 32, color: 'var(--clr-white-60)' }}>No requests in this section.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Reject Reason Modal */}
+      {rejectUid && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999 }}>
+          <div className="glass-card" style={{ padding: 28, maxWidth: 360, width: '90%' }}>
+            <h4 style={{ fontWeight: 800, marginBottom: 12 }}>Reject Verification</h4>
+            <div className="form-group" style={{ marginBottom: 16 }}>
+              <label className="form-label">Rejection Reason</label>
+              <textarea className="form-input" rows={3} value={rejectReason} onChange={e => setRejectReason(e.target.value)} placeholder="Provide feedback to the gardener..." />
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button className="btn btn-secondary" onClick={() => { setRejectUid(null); setRejectReason(''); }}>Cancel</button>
+              <button className="btn btn-primary" style={{ background: '#ef4444', borderColor: '#ef4444' }} onClick={handleRejectSubmit}>Confirm Reject</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Live Streams Manager (Audit) ─────────────────────────────────────────────
+function LiveStreamsManager() {
+  const [active, setActive] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [subTab, setSubTab] = useState('active'); // active | history
+
+  const loadStreams = async () => {
+    setLoading(true);
+    try {
+      const [actRes, histRes] = await Promise.all([
+        fetch('/api/live/active'),
+        fetch('/api/admin/live/history')
+      ]);
+      if (actRes.ok) setActive(await actRes.json());
+      if (histRes.ok) setHistory(await histRes.json());
+    } catch {} finally { setLoading(false); }
+  };
+
+  useEffect(() => {
+    loadStreams();
+    const interval = setInterval(loadStreams, 6000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div>
+      <div className="admin-header">
+        <div>
+          <div className="admin-title">Live Streams & Broadcasts</div>
+          <div className="admin-subtitle">Audit active live streams, viewer metrics, comment logs, and past broadcasts.</div>
+        </div>
+        <button className="btn btn-secondary btn-sm" onClick={loadStreams}><RefreshCw size={14} /> Reload</button>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+        <button onClick={() => setSubTab('active')}
+          style={{
+            padding: '6px 16px', borderRadius: 8, border: 'none', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer',
+            background: subTab === 'active' ? 'var(--clr-green)' : 'rgba(255,255,255,0.04)',
+            color: subTab === 'active' ? '#000' : 'var(--clr-white-60)'
+          }}
+        >
+          🔴 Active Streams ({active.length})
+        </button>
+        <button onClick={() => setSubTab('history')}
+          style={{
+            padding: '6px 16px', borderRadius: 8, border: 'none', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer',
+            background: subTab === 'history' ? 'var(--clr-green)' : 'rgba(255,255,255,0.04)',
+            color: subTab === 'history' ? '#000' : 'var(--clr-white-60)'
+          }}
+        >
+          📁 Broadcast Log ({history.length})
+        </button>
+      </div>
+
+      {subTab === 'active' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+          {active.length === 0 && (
+            <div className="glass-card" style={{ padding: 40, textAlign: 'center', gridColumn: '1/-1' }}>
+              <p style={{ color: 'var(--clr-white-60)', fontSize: '0.85rem' }}>No active live streams currently.</p>
+            </div>
+          )}
+          {active.map(s => (
+            <div key={s.streamerUid} className="glass-card" style={{ padding: 20, borderLeft: '3px solid #ef4444' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'linear-gradient(135deg,var(--clr-green),var(--clr-lavender))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem', overflow: 'hidden' }}>
+                  {s.streamerAvatar ? <img src={s.streamerAvatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : s.streamerEmoji || '🌸'}
+                </div>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.82rem' }}>{s.streamerName}</div>
+                  <div style={{ fontSize: '0.65rem', color: '#ef4444' }}>🔴 LIVE NOW</div>
+                </div>
+              </div>
+              <h4 style={{ fontWeight: 800, fontSize: '0.9rem', marginBottom: 8 }}>{s.title}</h4>
+              <div style={{ display: 'flex', gap: 14, fontSize: '0.72rem', color: 'var(--clr-white-60)', borderTop: '1px solid var(--glass-border)', paddingTop: 10 }}>
+                <span>👁️ {s.viewers} watching</span>
+                <span>🕒 {new Date(s.startedAt).toLocaleTimeString()}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="data-table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Streamer</th>
+                <th>Title</th>
+                <th>Started</th>
+                <th>Ended</th>
+                <th>Peak Viewers</th>
+                <th>Comments</th>
+                <th>Gifts</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map(h => (
+                <tr key={h.id}>
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'linear-gradient(135deg,var(--clr-green),var(--clr-lavender))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', overflow: 'hidden' }}>
+                        {h.streamer_avatar ? <img src={h.streamer_avatar} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : '🌸'}
+                      </div>
+                      <span style={{ fontWeight: 700, fontSize: '0.8rem' }}>{h.streamer_name}</span>
+                    </div>
+                  </td>
+                  <td style={{ fontWeight: 700, fontSize: '0.8rem' }}>{h.title}</td>
+                  <td style={{ fontSize: '0.72rem', color: 'var(--clr-white-60)' }}>{new Date(h.started_at).toLocaleString()}</td>
+                  <td style={{ fontSize: '0.72rem', color: 'var(--clr-white-60)' }}>{h.ended_at ? new Date(h.ended_at).toLocaleString() : <span style={{ color: '#ef4444' }}>Live</span>}</td>
+                  <td style={{ fontWeight: 700 }}>{h.peak_viewers}</td>
+                  <td>{h.total_comments}</td>
+                  <td>{h.total_gifts}</td>
+                </tr>
+              ))}
+              {history.length === 0 && (
+                <tr><td colSpan="7" style={{ textAlign: 'center', padding: 32, color: 'var(--clr-white-60)' }}>No past broadcast logs.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Admin Layout ────────────────────────────────────────────────────────
 export default function AdminPanel() {
   const { currentUser, isAdmin, logout } = useAuth();
@@ -799,13 +1110,20 @@ export default function AdminPanel() {
         fetch('/api/users'),
         fetch('/api/admin/users/active'),
       ]);
-      if (usersRes.ok) setRealUsers(await usersRes.json());
-      if (activeRes.ok) setActiveUsers(await activeRes.json());
-    } catch {}
+      if (usersRes.ok) {
+        const data = await usersRes.json();
+        if (Array.isArray(data)) setRealUsers(data);
+        else console.error('[AdminPanel] /api/users returned non-array:', data);
+      }
+      if (activeRes.ok) {
+        const aData = await activeRes.json();
+        if (Array.isArray(aData)) setActiveUsers(aData);
+      }
+    } catch (err) { console.error('[AdminPanel] refreshData error:', err); }
   }, []);
 
-  // Initial load
-  useEffect(() => { refreshData(); }, []);
+  // Initial load — also re-fires when isAdmin becomes true (e.g. after auth resolves)
+  useEffect(() => { if (isAdmin) refreshData(); }, [isAdmin, refreshData]);
 
   // ── Socket.IO real-time admin events ─────────────────────────────────────
   useEffect(() => {
@@ -906,6 +1224,10 @@ export default function AdminPanel() {
     panelElement = <UserManagement realUsers={realUsers} onRefresh={refreshData} />;
   } else if (activeSection === 'register') {
     panelElement = <RegisterUser onRefresh={refreshData} />;
+  } else if (activeSection === 'creator-hub') {
+    panelElement = <CreatorHub onRefresh={refreshData} />;
+  } else if (activeSection === 'live-streams') {
+    panelElement = <LiveStreamsManager />;
   } else if (activeSection === 'messages') {
     panelElement = <UserMessagesManager />;
   } else if (activeSection === 'coupons') {
